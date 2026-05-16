@@ -1,0 +1,117 @@
+{
+  "units": "headWidth",
+  "origin": "headCenter",
+  "avatars": {
+    "dog": {
+      "attachments": [
+        {
+          "id": "leftDuck",
+          "glb": "../Duck.glb",
+          "slot": "leftEar",
+          "size": 0.35,
+          "offset": [0.0, 0.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0]
+        },
+        {
+          "id": "rightDuck",
+          "glb": "../Duck.glb",
+          "slot": "rightEar",
+          "size": 0.35,
+          "offset": [0.0, 0.0, 0.0],
+          "rotation": [0.0, 0.0, 0.0]
+        }
+      ],
+      "background": {
+        "image": "/assets/background.svg",
+        "mode": "image"
+      },
+      "camera": {
+        "opacity": 1
+      },
+      "body": {
+        "image": "/assets/body.svg",
+        "mode": "image",
+        "xPercent": 50,
+        "bottomPercent": -2,
+        "widthPercent": 74,
+        "opacity": 1
+      },
+      "material": {
+        "mode": "basicPalette"
+      },
+      "debug": {
+        "showAnchorCube": false,
+        "anchorCube": {
+          "size": 0.12,
+          "position": [0.0, 0.02, 0.25],
+          "color": "#ff3366",
+          "opacity": 0.2
+        }
+      }
+    },
+    "rabbit": {
+      "glb": "",
+      "transform": {
+        "size": 0.7,
+        "position": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0]
+      },
+      "background": {
+        "image": "",
+        "mode": "none"
+      },
+      "body": {
+        "image": "",
+        "mode": "none",
+        "xPercent": 50,
+        "bottomPercent": -2,
+        "widthPercent": 74,
+        "opacity": 1
+      },
+      "material": {
+        "mode": "original"
+      },
+      "debug": {
+        "showAnchorCube": false,
+        "anchorCube": {
+          "size": 0.12,
+          "position": [0.0, 0.02, 0.25],
+          "color": "#ff3366",
+          "opacity": 0.2
+        }
+      }
+    },
+    "fox": {
+      "glb": "",
+      "transform": {
+        "size": 0.7,
+        "position": [0.0, 0.0, 0.0],
+        "rotation": [0.0, 0.0, 0.0]
+      },
+      "background": {
+        "image": "",
+        "mode": "none"
+      },
+      "body": {
+        "image": "",
+        "mode": "none",
+        "xPercent": 50,
+        "bottomPercent": -2,
+        "widthPercent": 74,
+        "opacity": 1
+      },
+      "material": {
+        "mode": "original"
+      },
+      "debug": {
+        "showAnchorCube": false,
+        "anchorCube": {
+          "size": 0.12,
+          "position": [0.0, 0.02, 0.25],
+          "color": "#ff3366",
+          "opacity": 0.2
+        }
+      }
+    }
+  }
+}

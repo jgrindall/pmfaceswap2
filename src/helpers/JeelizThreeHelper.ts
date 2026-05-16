@@ -48,7 +48,7 @@ class JeelizThreeHelperClass {
   private threeRenderer: THREE.WebGLRenderer | null = null;
   private threeScene: THREE.Scene | null = null;
   private threeVideoMesh: THREE.Mesh | null = null;
-  private threeVideoTexture: THREE.DataTexture | null = null;
+  private threeVideoTexture: THREE.Texture | null = null;
   private threeTranslation: THREE.Vector3 | null = null;
 
   private detectCallback: ((isDetected: boolean) => void) | null = null;
@@ -64,7 +64,87 @@ class JeelizThreeHelperClass {
   private glVideoTexture: WebGLTexture | null = null;
 
   private videoTransformMat2: Float32Array | null = null;
+  private videoBackgroundElement: HTMLVideoElement | null = null;
   private sanitizedGeometries = new WeakSet<THREE.BufferGeometry>();
+
+  private ensureVideoBackgroundLayer() {
+    if (!this.faceFilterCanvas || !this.videoElement) {
+      return;
+    }
+
+    const canvas = this.faceFilterCanvas;
+    const parent = canvas.parentElement;
+    if (!parent) {
+      return;
+    }
+
+    const layerId = `${canvas.id || 'jeeFaceFilterCanvas'}__video_bg`;
+    const previous = parent.querySelector(`#${layerId}`);
+    if (previous) {
+      previous.remove();
+    }
+
+    const bgVideo = this.videoElement.cloneNode(true) as HTMLVideoElement;
+    bgVideo.id = layerId;
+    bgVideo.autoplay = true;
+    bgVideo.muted = true;
+    bgVideo.playsInline = true;
+    bgVideo.srcObject = this.videoElement.srcObject;
+    bgVideo.style.position = 'absolute';
+    bgVideo.style.top = '0';
+    bgVideo.style.left = '50%';
+    bgVideo.style.transform = 'translateX(-50%) rotateY(180deg)';
+    bgVideo.style.width = '100%';
+    bgVideo.style.height = '100%';
+    bgVideo.style.objectFit = 'cover';
+    bgVideo.style.pointerEvents = 'none';
+    bgVideo.style.zIndex = '1';
+
+    if (!parent.style.position) {
+      parent.style.position = 'relative';
+    }
+
+    canvas.style.position = 'relative';
+    canvas.style.zIndex = '3';
+    canvas.style.background = 'transparent';
+
+    parent.insertBefore(bgVideo, canvas);
+    this.videoBackgroundElement = bgVideo;
+    bgVideo.play().catch(() => {
+      // Ignore autoplay blocking; browser may require prior user gesture.
+    });
+  }
+
+  private updateVideoFaceMask(detectStates: DetectState[]) {
+    if (!this.videoBackgroundElement) {
+      return;
+    }
+
+    const ds = detectStates[0];
+    if (!ds || ds.detected < this.settings.detectionThreshold - this.settings.detectionHysteresis) {
+      this.videoBackgroundElement.style.visibility = 'hidden';
+      this.videoBackgroundElement.style.maskImage = 'none';
+      this.videoBackgroundElement.style.setProperty('-webkit-mask-image', 'none');
+      return;
+    }
+
+    this.videoBackgroundElement.style.visibility = 'visible';
+
+    const xNorm = THREE.MathUtils.clamp(ds.x * this.scaleW, -1, 1);
+    const yNorm = THREE.MathUtils.clamp(ds.y * this.scaleW, -1, 1);
+    const centerX = 50 + xNorm * 50;
+    const centerY = 50 - yNorm * 50 - 2;
+
+    const faceSpan = THREE.MathUtils.clamp(ds.s * this.scaleW * 100, 12, 80);
+    const radiusX = THREE.MathUtils.clamp(faceSpan * 0.98, 16, 60);
+    const radiusY = THREE.MathUtils.clamp(faceSpan * 1.2, 20, 70);
+
+    const mask = `radial-gradient(ellipse ${radiusX}% ${radiusY}% at ${centerX}% ${centerY}%, rgba(0, 0, 0, 1) 82%, rgba(0, 0, 0, 0) 100%)`;
+    this.videoBackgroundElement.style.maskImage = mask;
+    this.videoBackgroundElement.style.setProperty('-webkit-mask-image', mask);
+    this.videoBackgroundElement.style.maskRepeat = 'no-repeat';
+    this.videoBackgroundElement.style.setProperty('-webkit-mask-repeat', 'no-repeat');
+  }
 
   private destroy() {
     this.isVideoTextureReady = false;
@@ -172,8 +252,17 @@ class JeelizThreeHelperClass {
       return;
     }
 
-    this.threeVideoTexture = new THREE.DataTexture(new Uint8Array([255, 0, 0]), 1, 1, THREE.RGBFormat);
-    this.threeVideoTexture.needsUpdate = true;
+    if (this.videoElement) {
+      const videoTexture = new THREE.VideoTexture(this.videoElement);
+      videoTexture.magFilter = THREE.LinearFilter;
+      videoTexture.minFilter = THREE.LinearFilter;
+      videoTexture.generateMipmaps = false;
+      this.threeVideoTexture = videoTexture;
+      this.isVideoTextureReady = true;
+    } else {
+      this.threeVideoTexture = new THREE.DataTexture(new Uint8Array([255, 0, 0]), 1, 1, THREE.RGBFormat);
+      this.threeVideoTexture.needsUpdate = true;
+    }
 
     const videoMaterial = new THREE.RawShaderMaterial({
       depthWrite: false,
@@ -194,10 +283,14 @@ class JeelizThreeHelperClass {
     setVideoGeomAttribute('position', new THREE.BufferAttribute(videoScreenCorners, 2));
     videoGeometry.setIndex(new THREE.BufferAttribute(new Uint16Array([0, 1, 2, 0, 2, 3]), 1));
     this.threeVideoMesh = new THREE.Mesh(videoGeometry, videoMaterial);
-    this.applyVideoTexture(this.threeVideoMesh);
+    if (!this.isVideoTextureReady) {
+      this.applyVideoTexture(this.threeVideoMesh);
+    }
     this.threeVideoMesh.renderOrder = -1000;
     this.threeVideoMesh.frustumCulled = false;
-    this.threeScene.add(this.threeVideoMesh);
+    // JEELIZ already draws the camera frame on the shared canvas.
+    // Keep this mesh out of the scene to avoid black/invalid full-screen overlays.
+    this.threeVideoMesh.visible = false;
   }
 
   private detectInternal(detectStates: DetectState[]) {
@@ -209,10 +302,9 @@ class JeelizThreeHelperClass {
       }
 
       if (this.isDetected && ds.detected < this.settings.detectionThreshold - this.settings.detectionHysteresis) {
-        if (this.detectCallback) {
-          this.detectCallback(false);
-        }
-        threeCompositeObject.visible = false;
+        // Keep visibility sticky to avoid flicker from rapid confidence drops.
+        // We still report the confidence state through callbacks elsewhere.
+        return;
       } else if (!this.isDetected && ds.detected > this.settings.detectionThreshold + this.settings.detectionHysteresis) {
         if (this.detectCallback) {
           this.detectCallback(true);
@@ -269,6 +361,7 @@ class JeelizThreeHelperClass {
     this.videoTransformMat2 = spec.videoTransformMat2;
     this.faceFilterCanvas = spec.canvasElement;
     this.videoElement = spec.videoElement;
+    this.ensureVideoBackgroundLayer();
 
     if (detectCallback) {
       this.detectCallback = detectCallback;
@@ -319,6 +412,7 @@ class JeelizThreeHelperClass {
     const detectStates = [detectState as DetectState];
 
     this.detectInternal(detectStates);
+    this.updateVideoFaceMask(detectStates);
     this.updatePoses(detectStates, threeCamera);
     this.sanitizeSceneGeometries();
 

@@ -38,6 +38,7 @@ export abstract class FaceFilterBase {
     JEELIZFACEFILTER.init({
       canvasId,
       NNCPath: '/neuralNets/',
+      nExpressions: 2,
       videoSettings,
       callbackReady: (errCode: unknown, spec: any) => {
         if (errCode) {

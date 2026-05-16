@@ -1,21 +1,91 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import TWEEN from '@tweenjs/tween.js';
 import JeelizThreeHelper from './helpers/JeelizThreeHelper';
 import addDragEventListener from './helpers/addDragEventListener';
 import { FaceFilterBase } from './faceFilterBase';
+import avatarProfiles from './config/avatars.json';
 
-const TUT_GLB_PATH = new URL('../tut.glb', import.meta.url).href;
+const DOG_PROFILE = avatarProfiles.avatars.dog;
+const GLB_ASSET_URLS: Record<string, string> = {
+  '../Duck.glb': new URL('../Duck.glb', import.meta.url).href,
+  '../tut.glb': new URL('../tut.glb', import.meta.url).href
+};
+
+const SLOT_POSITIONS: Record<string, [number, number, number]> = {
+  // Coordinate system for all slots/offsets:
+  // - origin = head center
+  // - unit = head width (1.0 means one full head width)
+  // Example: 0.02 means 2% of head width.
+  leftEar: [-0.42, 0.34, 0.04],
+  rightEar: [0.42, 0.34, 0.04],
+  nose: [0.0, 0.0, 0.22],
+  mouth: [0.0, -0.18, 0.2],
+  hat: [0.0, 0.56, 0.04]
+};
 
 class DogFaceFilter extends FaceFilterBase {
-  private tongueMesh: THREE.Object3D | null = null;
-  private noseMesh: THREE.Object3D | null = null;
-  private earMesh: THREE.Object3D | null = null;
+  private attachmentMeshes: THREE.Object3D[] = [];
+
+  private emitExpression(label: 'smile' | 'frown' | 'neutral', smileScore: number, frownScore: number, all: number[]) {
+    window.dispatchEvent(
+      new CustomEvent('face-expression', {
+        detail: {
+          label,
+          smileScore,
+          frownScore,
+          all
+        }
+      })
+    );
+  }
+
+  private createStableMaterial(material: THREE.Material) {
+    const cloned = material.clone();
+    cloned.visible = true;
+    cloned.transparent = false;
+    cloned.opacity = 1;
+    cloned.depthTest = false;
+    cloned.depthWrite = false;
+    cloned.side = THREE.DoubleSide;
+    cloned.needsUpdate = true;
+    return cloned;
+  }
+
+  private createStableMaterialSet(material: THREE.Material | THREE.Material[]) {
+    if (Array.isArray(material)) {
+      return material.map((m) => this.createStableMaterial(m));
+    }
+    return this.createStableMaterial(material);
+  }
+
+  private buildStaticMeshGroupFromGLB(root: THREE.Object3D) {
+    const group = new THREE.Group();
+    root.updateMatrixWorld(true);
+    const invRoot = new THREE.Matrix4().copy(root.matrixWorld).invert();
+
+    root.traverse((child: THREE.Object3D) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) {
+        return;
+      }
+
+      const staticMesh = new THREE.Mesh(
+        (mesh.geometry as THREE.BufferGeometry).clone(),
+        this.createStableMaterialSet(mesh.material as THREE.Material | THREE.Material[])
+      );
+
+      const relativeMatrix = new THREE.Matrix4().copy(invRoot).multiply(mesh.matrixWorld);
+      staticMesh.applyMatrix4(relativeMatrix);
+      staticMesh.matrixAutoUpdate = false;
+      staticMesh.frustumCulled = false;
+      group.add(staticMesh);
+    });
+
+    return group;
+  }
 
   protected afterReset(): void {
-    this.tongueMesh = null;
-    this.noseMesh = null;
-    this.earMesh = null;
+    this.attachmentMeshes = [];
   }
 
   private fitObjectToTargetSize(obj: THREE.Object3D, targetMaxDim: number) {
@@ -28,34 +98,16 @@ class DogFaceFilter extends FaceFilterBase {
     }
   }
 
-  private forceOpaqueMaterials(obj: THREE.Object3D) {
-    obj.traverse((child: THREE.Object3D) => {
-      const mesh = child as THREE.Mesh;
-      const material = mesh.material;
-      if (!material) {
-        return;
-      }
-      if (Array.isArray(material)) {
-        material.forEach((m) => {
-          m.transparent = false;
-          m.opacity = 1;
-          m.needsUpdate = true;
-        });
-      } else {
-        material.transparent = false;
-        material.opacity = 1;
-        material.needsUpdate = true;
-      }
-    });
-  }
-
-  private configureLoadedObject(obj: THREE.Object3D, targetMaxDim: number, y: number, z: number) {
+  private configureLoadedObject(obj: THREE.Object3D, targetMaxDim: number, x: number, y: number, z: number) {
     this.sanitizeObjectGeometries(obj);
     this.fitObjectToTargetSize(obj, targetMaxDim);
+    obj.visible = true;
+    obj.position.setX(x);
     obj.position.setY(y);
     obj.position.setZ(z);
     obj.renderOrder = 10000;
     obj.traverse((child: THREE.Object3D) => {
+      child.visible = true;
       child.frustumCulled = false;
       child.renderOrder = 10000;
     });
@@ -89,91 +141,84 @@ class DogFaceFilter extends FaceFilterBase {
     });
   }
 
-  private setObjectOpacity(obj: THREE.Object3D, opacity: number) {
-    obj.traverse((child: THREE.Object3D) => {
-      const mesh = child as THREE.Mesh;
-      const material = mesh.material;
-      if (!material) {
-        return;
-      }
-      if (Array.isArray(material)) {
-        material.forEach((m) => {
-          m.transparent = true;
-          m.opacity = opacity;
-        });
-      } else {
-        material.transparent = true;
-        material.opacity = opacity;
-      }
-    });
+  private getAttachmentAnchorPosition(slot: string, offset: number[]) {
+    // `offset` uses the same head-width units as SLOT_POSITIONS.
+    const base = SLOT_POSITIONS[slot] || SLOT_POSITIONS.nose;
+    return {
+      x: base[0] + (offset?.[0] || 0),
+      y: base[1] + (offset?.[1] || 0),
+      z: base[2] + (offset?.[2] || 0)
+    };
   }
 
   protected initThreeScene(spec: any): void {
     const threeStuffs = JeelizThreeHelper.init(spec, this.detectCallback);
     this.videoGeometry = threeStuffs.videoMesh.geometry;
 
-    const debugMarker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.08, 16, 12),
-      new THREE.MeshBasicMaterial({ color: 0x00ff88 })
-    );
-    debugMarker.position.set(0, 0, 0.2);
-    debugMarker.frustumCulled = false;
-    this.modelObj3D.add(debugMarker);
+    const loadingManager = new THREE.LoadingManager();
+    const gltfLoader = new GLTFLoader(loadingManager);
+    let loadedAttachmentCount = 0;
 
-    const gltfLoader = new GLTFLoader();
-    gltfLoader.load(
-      TUT_GLB_PATH,
-      (gltf) => {
-        const sourceRoot = gltf.scene || gltf.scenes[0];
-        if (!sourceRoot) {
-          console.error('GLB loaded but scene graph is empty:', TUT_GLB_PATH);
-          return;
+    DOG_PROFILE.attachments.forEach((attachment) => {
+      const attachmentPath = GLB_ASSET_URLS[attachment.glb] || attachment.glb;
+      gltfLoader.load(
+        attachmentPath,
+        (gltf) => {
+          const sourceRoot = gltf.scene || gltf.scenes[0];
+          if (!sourceRoot) {
+            return;
+          }
+
+          const attachmentObj = this.buildStaticMeshGroupFromGLB(sourceRoot);
+          const anchor = this.getAttachmentAnchorPosition(attachment.slot, attachment.offset);
+          this.configureLoadedObject(attachmentObj, attachment.size, anchor.x, anchor.y, anchor.z);
+          attachmentObj.rotation.set(attachment.rotation[0], attachment.rotation[1], attachment.rotation[2]);
+
+          if (DOG_PROFILE.debug.showAnchorCube) {
+            const probeMesh = new THREE.Mesh(
+              new THREE.BoxGeometry(
+                DOG_PROFILE.debug.anchorCube.size,
+                DOG_PROFILE.debug.anchorCube.size,
+                DOG_PROFILE.debug.anchorCube.size
+              ),
+              new THREE.MeshBasicMaterial({
+                color: DOG_PROFILE.debug.anchorCube.color,
+                transparent: true,
+                opacity: DOG_PROFILE.debug.anchorCube.opacity
+              })
+            );
+            probeMesh.position.set(anchor.x, anchor.y, anchor.z);
+            probeMesh.frustumCulled = false;
+            probeMesh.add(attachmentObj);
+            this.modelObj3D.add(probeMesh);
+          } else {
+            this.modelObj3D.add(attachmentObj);
+          }
+
+          this.attachmentMeshes.push(attachmentObj);
+          loadedAttachmentCount += 1;
+        },
+        undefined,
+        (err) => {
+          console.error(`Failed to load attachment ${attachment.id}:`, err);
         }
+      );
+    });
 
-        this.earMesh = sourceRoot.clone(true);
-        this.configureLoadedObject(this.earMesh, 0.45, -0.3, 0);
-        this.forceOpaqueMaterials(this.earMesh);
-
-        this.noseMesh = sourceRoot.clone(true);
-        this.configureLoadedObject(this.noseMesh, 0.28, -0.05, 0.15);
-        this.forceOpaqueMaterials(this.noseMesh);
-
-        this.tongueMesh = sourceRoot.clone(true);
-        this.configureLoadedObject(this.tongueMesh, 0.35, -0.28, 0);
-        this.tongueMesh.visible = false;
-        this.setObjectOpacity(this.tongueMesh, 0);
-
-        if (!this.mixer && gltf.animations.length > 0) {
-          this.mixer = new THREE.AnimationMixer(this.tongueMesh);
-          this.action = this.mixer.clipAction(gltf.animations[0]);
-          this.action.setLoop(THREE.LoopOnce, 1);
-          this.action.clampWhenFinished = true;
-          this.action.play();
-          this.action.paused = true;
-        }
-
-        this.modelObj3D.add(this.earMesh);
-        this.modelObj3D.add(this.noseMesh);
-        this.modelObj3D.add(this.tongueMesh);
-
-        addDragEventListener(this.modelObj3D, undefined, false, this.threeCamera);
-        threeStuffs.faceObject.add(this.modelObj3D);
-        this.isLoaded = true;
-      },
-      undefined,
-      (err) => {
-        console.error('Failed to load tut.glb:', err);
+    loadingManager.onLoad = () => {
+      if (loadedAttachmentCount === 0) {
         const fallback = new THREE.Mesh(
           new THREE.BoxGeometry(0.35, 0.35, 0.35),
           new THREE.MeshNormalMaterial({ wireframe: true })
         );
         fallback.frustumCulled = false;
         this.modelObj3D.add(fallback);
-        addDragEventListener(this.modelObj3D, undefined, false, this.threeCamera);
-        threeStuffs.faceObject.add(this.modelObj3D);
-        this.isLoaded = true;
       }
-    );
+
+      addDragEventListener(this.modelObj3D, undefined, false, this.threeCamera);
+      threeStuffs.faceObject.add(this.modelObj3D);
+      this.isLoaded = true;
+    };
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.8);
     threeStuffs.scene.add(ambient);
@@ -186,76 +231,29 @@ class DogFaceFilter extends FaceFilterBase {
     threeStuffs.scene.add(this.frameObj3D);
   }
 
-  private animateTongue(mesh: THREE.Object3D, isReverse = false) {
-    if (!this.action) {
+  protected onDetectedTrack(detectState: any): void {
+    const expressions = Array.isArray(detectState?.expressions)
+      ? detectState.expressions
+      : detectState?.expressions
+        ? Array.from(detectState.expressions as ArrayLike<number>)
+        : [];
+
+    if (!expressions.length) {
+      this.emitExpression('neutral', 0, 0, []);
       return;
     }
 
-    mesh.visible = true;
+    const smileScore = Number(expressions[0] ?? 0);
+    const frownScore = Number(expressions[1] ?? 0);
 
-    if (isReverse) {
-      this.action.timeScale = -1;
-      this.action.paused = false;
-
-      setTimeout(() => {
-        if (!this.action) {
-          return;
-        }
-
-        this.action.paused = true;
-        this.isOpaque = false;
-        this.isTongueOut = false;
-        this.isAnimating = false;
-        this.isAnimationOver = true;
-
-        const tweenState = { opacity: 1 };
-        new TWEEN.Tween(tweenState)
-          .to({ opacity: 0 }, 150)
-          .onUpdate(() => this.setObjectOpacity(mesh, tweenState.opacity))
-          .start();
-      }, 150);
-    } else {
-      this.action.timeScale = 1;
-      this.action.reset();
-      this.action.paused = false;
-
-      const tweenState = { opacity: 0 };
-      new TWEEN.Tween(tweenState)
-        .to({ opacity: 1 }, 100)
-        .onUpdate(() => this.setObjectOpacity(mesh, tweenState.opacity))
-        .onComplete(() => {
-          this.isOpaque = true;
-          setTimeout(() => {
-            if (!this.action) {
-              return;
-            }
-            this.action.paused = true;
-            this.isAnimating = false;
-            this.isTongueOut = true;
-            this.isAnimationOver = true;
-          }, 150);
-        })
-        .start();
-    }
-  }
-
-  protected onDetectedTrack(detectState: any): void {
-    if (detectState.expressions[0] >= 0.85 && !this.isOverThreshold) {
-      this.isOverThreshold = true;
-      this.isUnderThreshold = false;
-      this.isAnimationOver = false;
+    let label: 'smile' | 'frown' | 'neutral' = 'neutral';
+    if (smileScore > 0.55 && smileScore > frownScore + 0.1) {
+      label = 'smile';
+    } else if (frownScore > 0.45 && frownScore > smileScore + 0.05) {
+      label = 'frown';
     }
 
-    if (detectState.expressions[0] <= 0.1 && !this.isUnderThreshold) {
-      this.isOverThreshold = false;
-      this.isUnderThreshold = true;
-      this.isAnimationOver = false;
-    }
-
-    if (this.isLoaded && this.isOverThreshold && !this.isAnimating && !this.isAnimationOver && this.tongueMesh) {
-      this.isAnimating = true;
-      this.animateTongue(this.tongueMesh, this.isTongueOut);
-    }
+    this.emitExpression(label, smileScore, frownScore, expressions.map((value) => Number(value)));
   }
 }
 

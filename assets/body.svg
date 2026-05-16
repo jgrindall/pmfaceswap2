@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1200">
+  <defs>
+    <linearGradient id="robe" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1d7e58"/>
+      <stop offset="100%" stop-color="#0c4a35"/>
+    </linearGradient>
+  </defs>
+  <path d="M120 1180 L220 420 L580 420 L680 1180 Z" fill="url(#robe)"/>
+  <ellipse cx="400" cy="430" rx="220" ry="72" fill="#2ea177" opacity="0.8"/>
+  <rect x="330" y="540" width="140" height="470" fill="#c7a34b" opacity="0.45"/>
+</svg>
